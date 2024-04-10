@@ -601,7 +601,7 @@ def generate_acc(input_seq,
       for _ in range(num_samples):
 
         with ctx:
-          out = model.generate(x[-num_memory_tokens:],
+          out = model.generate(x[:, -num_memory_tokens:],
                               1,
                               temperature=temperature,
                               return_prime=True,
