@@ -583,6 +583,8 @@ def generate_acc(input_seq,
                   temperature=0.9
                   ):
 
+    input_seq = input_seq[-num_memory_tokens:]
+
     if force_acc:
       x = torch.LongTensor([input_seq+[0]] * num_batches).cuda()
     else:
@@ -601,7 +603,7 @@ def generate_acc(input_seq,
       for _ in range(num_samples):
 
         with ctx:
-          out = model.generate(x[:, -num_memory_tokens:],
+          out = model.generate(x,
                               1,
                               temperature=temperature,
                               return_prime=True,
