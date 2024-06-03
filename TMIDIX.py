@@ -1816,7 +1816,7 @@ def plot_ms_SONG(ms_song,
     plt.title(plot_title)
 
     if return_plt:
-      return plt
+      return fig
 
     plt.show()
 
@@ -5088,6 +5088,305 @@ def delta_score_notes(score_notes,
     pe = n
 
   return delta_score
+
+###################################################################################
+
+def check_and_fix_chords_in_chordified_score(chordified_score,
+                                             channels_index=3,
+                                             pitches_index=4
+                                             ):
+  fixed_chordified_score = []
+
+  bad_chords_counter = 0
+
+  for c in chordified_score:
+
+    tones_chord = sorted(set([t[pitches_index] % 12 for t in c if t[channels_index] != 9]))
+
+    if tones_chord:
+
+        if tones_chord not in ALL_CHORDS_SORTED:
+          bad_chords_counter += 1
+
+        while tones_chord not in ALL_CHORDS_SORTED:
+          tones_chord.pop(0)
+
+    new_chord = []
+
+    c.sort(key = lambda x: x[pitches_index], reverse=True)
+
+    for e in c:
+      if e[channels_index] != 9:
+        if e[pitches_index] % 12 in tones_chord:
+          new_chord.append(e)
+
+      else:
+        new_chord.append(e)
+
+    fixed_chordified_score.append(new_chord)
+
+  return fixed_chordified_score, bad_chords_counter
+
+###################################################################################
+
+from itertools import combinations, groupby
+
+###################################################################################
+
+def advanced_check_and_fix_chords_in_chordified_score(chordified_score,
+                                                      channels_index=3,
+                                                      pitches_index=4,
+                                                      use_filtered_chords=True,
+                                                      skip_drums=False
+                                                      ):
+  fixed_chordified_score = []
+
+  bad_chords_counter = 0
+
+  if use_filtered_chords:
+    CHORDS = ALL_CHORDS_FILTERED
+  else:
+    CHORDS = ALL_CHORDS_SORTED
+
+  for c in chordified_score:
+
+    tones_chord = sorted(set([t[pitches_index] % 12 for t in c if t[channels_index] != 9]))
+
+    if tones_chord:
+
+        if tones_chord not in CHORDS:
+          
+          pitches_chord = sorted(set([p[pitches_index] for p in c if p[channels_index] != 9]), reverse=True)
+          
+          if len(tones_chord) == 2:
+            tones_counts = Counter([p % 12 for p in pitches_chord]).most_common()
+
+            if tones_counts[0][1] > 1:
+              tones_chord = [tones_counts[0][0]]
+            elif tones_counts[1][1] > 1:
+              tones_chord = [tones_counts[1][0]]
+            else:
+              tones_chord = [pitches_chord[0] % 12]
+
+          else:
+            tones_chord_combs = [list(comb) for i in range(len(tones_chord)-2, 0, -1) for comb in combinations(tones_chord, i+1)]
+
+            for co in tones_chord_combs:
+              if co in CHORDS:
+                tones_chord = co
+                break
+
+          bad_chords_counter += 1
+
+    new_chord = []
+
+    c.sort(key = lambda x: x[pitches_index], reverse=True)
+
+    for e in c:
+      if e[channels_index] != 9:
+        if e[pitches_index] % 12 in tones_chord:
+          new_chord.append(e)
+
+      else:
+        if not skip_drums:
+          new_chord.append(e)
+
+    fixed_chordified_score.append(new_chord)
+
+  return fixed_chordified_score, bad_chords_counter
+
+###################################################################################
+
+def score_chord_to_tones_chord(chord,
+                               transpose_value=0,
+                               channels_index=3,
+                               pitches_index=4):
+
+  return sorted(set([(p[4]+transpose_value) % 12 for p in chord if p[channels_index] != 9]))
+
+###################################################################################
+
+def grouped_set(seq):
+  return [k for k, v in groupby(seq)]
+
+###################################################################################
+
+def ordered_set(seq):
+  dic = {}
+  return [k for k, v in dic.fromkeys(seq).items()]
+
+###################################################################################
+
+def add_melody_to_enhanced_score_notes(enhanced_score_notes,
+                                      melody_start_time=0,
+                                      melody_start_chord=0,
+                                      melody_notes_min_duration=-1,
+                                      melody_notes_max_duration=255,
+                                      melody_duration_overlap_tolerance=4,
+                                      melody_avg_duration_divider=2,
+                                      melody_base_octave=5,
+                                      melody_channel=3,
+                                      melody_patch=40,
+                                      melody_max_velocity=110,
+                                      acc_max_velocity=90,
+                                      pass_drums=True
+                                      ):
+  
+    if pass_drums:
+      score = copy.deepcopy(enhanced_score_notes)
+    else:
+      score = [e for e in copy.deepcopy(enhanced_score_notes) if e[3] !=9]
+
+    if melody_notes_min_duration > 0:
+      min_duration = melody_notes_min_duration
+    else:
+      durs = [d[2] for d in score]
+      min_duration = Counter(durs).most_common()[0][0]
+
+    adjust_score_velocities(score, acc_max_velocity)
+
+    cscore = chordify_score([1000, score])
+
+    melody_score = []
+    acc_score = []
+
+    pt = melody_start_time
+
+    for c in cscore[:melody_start_chord]:
+      acc_score.extend(c)
+
+    for c in cscore[melody_start_chord:]:
+
+      durs = [d[2] if d[3] != 9 else -1 for d in c]
+
+      if not all(d == -1 for d in durs):
+        ndurs = [d for d in durs if d != -1]
+        avg_dur = (sum(ndurs) / len(ndurs)) / melody_avg_duration_divider
+        best_dur = min(durs, key=lambda x:abs(x-avg_dur))
+        pidx = durs.index(best_dur)
+
+        cc = copy.deepcopy(c[pidx])
+
+        if c[0][1] >= pt - melody_duration_overlap_tolerance and best_dur >= min_duration:
+
+          cc[3] = melody_channel
+          cc[4] = (c[pidx][4] % 24)
+          cc[5] = 100 + ((c[pidx][4] % 12) * 2)
+          cc[6] = melody_patch
+
+          melody_score.append(cc)
+          acc_score.extend(c)
+
+          pt = c[0][1]+c[pidx][2]
+
+        else:
+          acc_score.extend(c)
+
+      else:
+        acc_score.extend(c)
+
+    values = [e[4] % 24 for e in melody_score]
+    smoothed = [values[0]]
+    for i in range(1, len(values)):
+        if abs(smoothed[-1] - values[i]) >= 12:
+            if smoothed[-1] < values[i]:
+                smoothed.append(values[i] - 12)
+            else:
+                smoothed.append(values[i] + 12)
+        else:
+            smoothed.append(values[i])
+
+    smoothed_melody = copy.deepcopy(melody_score)
+
+    for i, e in enumerate(smoothed_melody):
+      e[4] = (melody_base_octave * 12) + smoothed[i]
+
+    for i, m in enumerate(smoothed_melody[1:]):
+      if m[1] - smoothed_melody[i][1] < melody_notes_max_duration:
+        smoothed_melody[i][2] = m[1] - smoothed_melody[i][1]
+
+    adjust_score_velocities(smoothed_melody, melody_max_velocity)
+
+    final_score = sorted(smoothed_melody + acc_score, key=lambda x: (x[1], -x[4]))
+
+    return final_score
+    
+###################################################################################
+
+def find_paths(list_of_lists, path=[]):
+    if not list_of_lists:
+        return [path]
+    return [p for sublist in list_of_lists[0] for p in find_paths(list_of_lists[1:], path+[sublist])]
+
+###################################################################################
+
+def recalculate_score_timings(score, start_time=0):
+
+  rscore = copy.deepcopy(score)
+
+  pe = rscore[0]
+
+  abs_time = start_time
+
+  for e in rscore:
+
+    dtime = e[1] - pe[1]
+    pe = copy.deepcopy(e)
+    abs_time += dtime
+    e[1] = abs_time
+    
+  return rscore
+
+###################################################################################
+
+WHITE_NOTES = [0, 2, 4, 5, 7, 9, 11]
+BLACK_NOTES = [1, 3, 6, 8, 10]
+
+###################################################################################
+
+ALL_CHORDS_FILTERED = [[0], [0, 3], [0, 3, 5], [0, 3, 5, 8], [0, 3, 5, 9], [0, 3, 5, 10], [0, 3, 7],
+                      [0, 3, 7, 10], [0, 3, 8], [0, 3, 9], [0, 3, 10], [0, 4], [0, 4, 6],
+                      [0, 4, 6, 9], [0, 4, 6, 10], [0, 4, 7], [0, 4, 7, 10], [0, 4, 8], [0, 4, 9],
+                      [0, 4, 10], [0, 5], [0, 5, 8], [0, 5, 9], [0, 5, 10], [0, 6], [0, 6, 9],
+                      [0, 6, 10], [0, 7], [0, 7, 10], [0, 8], [0, 9], [0, 10], [1], [1, 4],
+                      [1, 4, 6], [1, 4, 6, 9], [1, 4, 6, 10], [1, 4, 6, 11], [1, 4, 7],
+                      [1, 4, 7, 10], [1, 4, 7, 11], [1, 4, 8], [1, 4, 8, 11], [1, 4, 9], [1, 4, 10],
+                      [1, 4, 11], [1, 5], [1, 5, 8], [1, 5, 8, 11], [1, 5, 9], [1, 5, 10],
+                      [1, 5, 11], [1, 6], [1, 6, 9], [1, 6, 10], [1, 6, 11], [1, 7], [1, 7, 10],
+                      [1, 7, 11], [1, 8], [1, 8, 11], [1, 9], [1, 10], [1, 11], [2], [2, 5],
+                      [2, 5, 8], [2, 5, 8, 11], [2, 5, 9], [2, 5, 10], [2, 5, 11], [2, 6], [2, 6, 9],
+                      [2, 6, 10], [2, 6, 11], [2, 7], [2, 7, 10], [2, 7, 11], [2, 8], [2, 8, 11],
+                      [2, 9], [2, 10], [2, 11], [3], [3, 5], [3, 5, 8], [3, 5, 8, 11], [3, 5, 9],
+                      [3, 5, 10], [3, 5, 11], [3, 7], [3, 7, 10], [3, 7, 11], [3, 8], [3, 8, 11],
+                      [3, 9], [3, 10], [3, 11], [4], [4, 6], [4, 6, 9], [4, 6, 10], [4, 6, 11],
+                      [4, 7], [4, 7, 10], [4, 7, 11], [4, 8], [4, 8, 11], [4, 9], [4, 10], [4, 11],
+                      [5], [5, 8], [5, 8, 11], [5, 9], [5, 10], [5, 11], [6], [6, 9], [6, 10],
+                      [6, 11], [7], [7, 10], [7, 11], [8], [8, 11], [9], [10], [11]]
+
+###################################################################################
+
+def harmonize_enhanced_melody_score_notes(enhanced_melody_score_notes):
+  
+  mel_tones = [e[4] % 12 for e in enhanced_melody_score_notes]
+
+  cur_chord = []
+
+  song = []
+
+  for i, m in enumerate(mel_tones):
+    cur_chord.append(m)
+    cc = sorted(set(cur_chord))
+
+    if cc in ALL_CHORDS_FILTERED:
+      song.append(cc)
+
+    else:
+      while sorted(set(cur_chord)) not in ALL_CHORDS_FILTERED:
+        cur_chord.pop(0)
+      cc = sorted(set(cur_chord))
+      song.append(cc)
+
+  return song
 
 ###################################################################################
 
